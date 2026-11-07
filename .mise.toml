@@ -1,2 +1,8 @@
 [tools]
 python = "3.13"
+
+[tasks]
+play = "python snake.py"
+demo = "python snake.py --demo"
+check = "python -m compileall -q src/snake snake.py"
+frames = "python snake.py --headless --frames 30 --seed 7"
