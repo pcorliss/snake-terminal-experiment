@@ -1,0 +1,15 @@
+# mise / python
+.mise.local.toml
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# generated audio assets (procedurally synthesized at runtime)
+.cache/
+
+# saved high scores + debug dumps
+.snake/
+*.log
