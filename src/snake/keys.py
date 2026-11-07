@@ -155,6 +155,12 @@ class KeyReader:
         attrs[6][termios.VMIN] = 0  # read() returns immediately...
         attrs[6][termios.VTIME] = 0  # ...and never blocks for a timeout
         attrs[0] &= ~(termios.ICANON | termios.ECHO)
+        # Take Ctrl-C away from the line discipline.  SIGINT only reaches us if
+        # we happen to be the terminal's foreground process group, which is not
+        # a thing a game should depend on; as a byte it is always ours, and we
+        # can restore the screen on the way out instead of leaving the user in
+        # the alternate buffer with a visible cursor.
+        attrs[3] &= ~termios.ISIG
         termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
         try:
             self._sel.register(self.fd, selectors.EVENT_READ)

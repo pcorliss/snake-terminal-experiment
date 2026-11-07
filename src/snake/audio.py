@@ -376,25 +376,78 @@ class AudioEngine:
 
     # --------------------------------------------------------------- setup
 
+    # Candidate players and the flag sets we use with them. {gain} is 0.00-1.00,
+    # {volume} is 0-65535 (PulseAudio's scale).
+    #
+    # afplay takes `-v`, *not* `-a`: `-a` is a Mac-only legacy switch it no
+    # longer accepts, and every sound effect died silently on it. Which is why
+    # _verify_player() below actually runs the player once instead of trusting
+    # that `which` found something whose flags we guessed right.
+    PLAYERS: Tuple[Tuple[str, List[str]], ...] = (
+        ("afplay", ["afplay", "-v", "{gain}", "{path}"]),
+        ("aplay", ["aplay", "-q", "{path}"]),
+        ("paplay", ["paplay", "--volume={volume}", "{path}"]),
+        ("play", ["play", "-q", "-v", "{gain}", "{path}"]),
+    )
+
     def _detect_player(self) -> None:
-        candidates = (
-            ("afplay", ["afplay", "-a", "{gain}", "{path}"]),
-            ("aplay", ["aplay", "-q", "-V", "none", "{path}"]),
-            ("paplay", ["paplay", "--volume={volume}", "{path}"]),
-            ("play", ["play", "-q", "-n", "-v", "{gain}", "{path}"]),
-        )
-        for kind, template in candidates:
+        for kind, template in self.PLAYERS:
             if shutil.which(kind):
                 self.player = template
                 self.player_kind = kind
                 return
         self.last_error = "no audio player found (afplay/aplay/paplay/play); sound is off"
 
+    def _probe_path(self) -> str:
+        """A 40 ms burst of silence, used to test a player's flag set."""
+        os.makedirs(self.cache_dir, exist_ok=True)
+        path = os.path.join(self.cache_dir, f"_probe_{VERSION}.wav")
+        if not os.path.exists(path):
+            n = int(self.sample_rate * 0.04)
+            with open(path, "wb") as fh:
+                fh.write(Track(rate=self.sample_rate, samples=array("h", bytes(2 * n))).wav_bytes())
+        return path
+
+    def _player_works(self, template: Sequence[str]) -> bool:
+        args = self._args_for_template(template, self._probe_path(), 0.0)
+        try:
+            proc = subprocess.run(
+                list(args), stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return proc.returncode == 0
+
+    def _verify_player(self) -> None:
+        """Run the detected player once; fall back to the others that work.
+
+        Without this, a wrong flag set looks exactly like "this machine has no
+        audio": every spawn exits non-zero into /dev/null.
+        """
+        if self.player is None:
+            return
+        if self._player_works(self.player):
+            return
+        rejected = self.player_kind
+        for kind, template in self.PLAYERS:
+            if kind == rejected or shutil.which(kind) is None:
+                continue
+            if self._player_works(template):
+                self.player = template
+                self.player_kind = kind
+                self.last_error = f"{rejected} rejected our flags; using {kind}"
+                return
+        self.player = None
+        self.player_kind = "none"
+        self.last_error = f"{rejected} exists but refused to play a wav; sound is off"
+
     def path_for(self, name: str) -> str:
         return os.path.join(self.cache_dir, f"{name}_{VERSION}.wav")
 
     def warm(self) -> None:
         """Generate every SFX up front so playback latency stays ~0."""
+        self._verify_player()
         os.makedirs(self.cache_dir, exist_ok=True)
         for name in list(_PATCHES) + ["eat"]:
             path = self.path_for(name)
@@ -432,12 +485,17 @@ class AudioEngine:
 
     def _args_for(self, path: str, gain: float) -> List[str]:
         assert self.player is not None
+        return self._args_for_template(self.player, path, gain)
+
+    @staticmethod
+    def _args_for_template(template: Sequence[str], path: str, gain: float) -> List[str]:
+        level = max(0.0, min(1.0, gain))
         out = []
-        for piece in self.player:
+        for piece in template:
             out.append(
                 piece.replace("{path}", path)
-                .replace("{gain}", f"{max(0.0, min(1.0, gain)):.2f}")
-                .replace("{volume}", str(int(max(0.0, min(1.0, gain)) * 65535)))
+                .replace("{gain}", f"{level:.2f}")
+                .replace("{volume}", str(int(level * 65535)))
             )
         return out
 
@@ -556,7 +614,10 @@ class AudioEngine:
     def _music_loop(self) -> None:
         spec = self._music_spec
         assert spec is not None
-        chunk_len = 16.0
+        # The first chunk is short so the score starts almost immediately
+        # (~0.3 s of synthesis); steady-state chunks are long enough that the
+        # next one is rendered while the current one is still playing.
+        chunk_len = 4.0
         slot = 0
         proc: Optional[subprocess.Popen] = None
         while not self._stop.is_set():
@@ -568,6 +629,7 @@ class AudioEngine:
                     fh.write(track.wav_bytes())
             except OSError:
                 return
+            chunk_len = 16.0
             # the previous chunk is still playing while this one was generated,
             # so we only wait out whatever fraction is left.
             while proc is not None and proc.poll() is None:

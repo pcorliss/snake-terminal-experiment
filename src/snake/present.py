@@ -22,15 +22,26 @@ class HeadlessPresenter:
     def start(self) -> None:
         pass
 
+    def _flush(self) -> None:
+        # `python snake.py | head -14` closes the pipe early; that is the
+        # reader's privilege, not a crash worth a traceback.
+        try:
+            self.out.flush()
+        except (BrokenPipeError, ValueError):
+            pass
+
     def end(self) -> None:
-        self.out.flush()
+        self._flush()
 
     def render(self, frame: Frame) -> None:
         if self.postfx is not None:
             self.postfx.apply(frame)
         rows = ["".join(frame.chars[row * frame.cols : row * frame.cols + frame.cols]).rstrip() for row in range(frame.rows)]
         self.frames.append(rows)
-        self.out.write("\n".join(rows))
-        if self.separator:
-            self.out.write(f"\n{self.separator} ({frame.cols}x{frame.rows})\n")
-        self.out.flush()
+        try:
+            self.out.write("\n".join(rows))
+            if self.separator:
+                self.out.write(f"\n{self.separator} ({frame.cols}x{frame.rows})\n")
+        except BrokenPipeError:
+            pass
+        self._flush()

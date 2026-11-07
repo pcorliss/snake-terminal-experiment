@@ -315,13 +315,18 @@ class AnsiPresenter:
 
     def leave(self, alt_screen: bool = True) -> None:
         w = self.writer
-        w.write(b"\x1b[0m")
-        w.write(b"\x1b[?25h")
-        w.write(b"\x1b[?2026l")
-        if alt_screen:
-            w.write(b"\x1b[?1049l")
-        w.write(b"\x1b]0;snake\x07")
-        w.flush()
+        # If the terminal went away mid-exit there is nothing to unhide the
+        # cursor in; swallowing this keeps the traceback off the user's shell.
+        try:
+            w.write(b"\x1b[0m")
+            w.write(b"\x1b[?25h")
+            w.write(b"\x1b[?2026l")
+            if alt_screen:
+                w.write(b"\x1b[?1049l")
+            w.write(b"\x1b]0;snake\x07")
+            w.flush()
+        except (BrokenPipeError, ValueError):
+            pass
 
     def set_size(self, cols: int, rows: int) -> None:
         if (cols, rows) != (self.cols, self.rows):
@@ -403,8 +408,13 @@ class AnsiPresenter:
 
         out.append(self.END_SYNC)
         payload = b"".join(out)
-        self.writer.write(payload)
-        self.writer.flush()
+        try:
+            self.writer.write(payload)
+            self.writer.flush()
+        except (BrokenPipeError, ValueError):
+            # Terminal closed under us: stop pretending to draw.
+            self.prev = [frame.cell_key(i) for i in range(total)]
+            return
 
         # snapshot for the next diff
         self.prev = [frame.cell_key(i) for i in range(total)]
