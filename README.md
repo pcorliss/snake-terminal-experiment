@@ -1,5 +1,9 @@
 # SNAKE // NEON ABYSS
 
+The following is an entirely generated with a local LLM. This is not my code. Enjoy!
+
+## Introduction
+
 A snake game for the terminal: truecolour, a custom cell renderer, a procedurally
 synthesized soundtrack, and an engine that contains no I/O and no wall clock.
 Python 3.13, standard library only — no `curses`, no pip installs, no binary
